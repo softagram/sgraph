@@ -1,5 +1,5 @@
 numpy==2.2.6
-pandas==2.3.2
+pandas==2.3.3
 lxml~=6.0.1
 Levenshtein==0.27.1
 pytest==8.4.2
