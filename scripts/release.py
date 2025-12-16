@@ -160,8 +160,12 @@ class ReleaseAutomation:
         self.run_command(["git", "add", "setup.cfg"])
         self.run_command(["git", "commit", "-m", f"releasing {version}"])
 
-    def push_and_create_pr(self, branch_name: str, version: str) -> None:
-        """Push branch and create PR."""
+    def push_and_create_pr(self, branch_name: str, version: str) -> Optional[int]:
+        """Push branch and create PR.
+
+        Returns:
+            PR number if created successfully, None if gh CLI not available or dry run.
+        """
         print(f"\n=== Pushing branch and creating PR ===")
 
         # Push branch
@@ -172,21 +176,44 @@ class ReleaseAutomation:
         if result.returncode == 0 and not self.dry_run:
             pr_title = f"Release {version}"
             pr_body = f"Automated release PR for version {version}"
-            self.run_command([
+            pr_result = self.run_command([
                 "gh", "pr", "create",
                 "--title", pr_title,
                 "--body", pr_body,
                 "--base", "main"
             ])
             print("\nPR created successfully. Please review and merge it before continuing.")
+
+            # Extract PR number from URL (e.g., https://github.com/org/repo/pull/123)
+            pr_number = self._extract_pr_number(pr_result.stdout)
+            return pr_number
         else:
             print(f"\nPlease create a PR manually for branch '{branch_name}'")
+            return None
 
-    def wait_for_pr_merge(self, branch_name: str) -> None:
+    def _extract_pr_number(self, output: str) -> Optional[int]:
+        """Extract PR number from gh pr create output.
+
+        Args:
+            output: Output from gh pr create command (contains PR URL)
+
+        Returns:
+            PR number as integer, or None if not found
+        """
+        if not output:
+            return None
+        # gh pr create outputs the PR URL, e.g., https://github.com/org/repo/pull/123
+        match = re.search(r'/pull/(\d+)', output)
+        if match:
+            return int(match.group(1))
+        return None
+
+    def wait_for_pr_merge(self, branch_name: str, pr_number: Optional[int] = None) -> None:
         """Wait for PR to be merged.
 
         Args:
             branch_name: The release branch name to check PR status for
+            pr_number: Optional PR number for fallback polling after branch deletion
         """
         if self.dry_run:
             print("[DRY RUN] Would wait for PR merge")
@@ -206,13 +233,14 @@ class ReleaseAutomation:
                 )
 
             print("\n=== Waiting for PR merge (automated check) ===")
-            self._poll_for_pr_merge(branch_name)
+            self._poll_for_pr_merge(branch_name, pr_number=pr_number)
         else:
             print("\n=== Waiting for PR merge ===")
             input("Press Enter after the PR has been merged to continue...")
 
     def _poll_for_pr_merge(
-        self, branch_name: str, timeout_minutes: int = 60, poll_interval_seconds: int = 10
+        self, branch_name: str, timeout_minutes: int = 60, poll_interval_seconds: int = 10,
+        pr_number: Optional[int] = None
     ) -> None:
         """Poll gh CLI to check if PR is merged.
 
@@ -220,6 +248,7 @@ class ReleaseAutomation:
             branch_name: The branch name to check PR status for
             timeout_minutes: Maximum time to wait for merge (default: 60)
             poll_interval_seconds: Time between status checks (default: 10)
+            pr_number: Optional PR number to use as fallback when branch lookup fails
         """
         start_time = time.time()
         timeout_seconds = timeout_minutes * 60
@@ -236,12 +265,25 @@ class ReleaseAutomation:
                     "Please merge the PR and run the release script again."
                 )
 
+            # Try to get PR status by branch name first
             result = subprocess.run(
                 ["gh", "pr", "view", branch_name, "--json", "state"],
                 capture_output=True,
                 text=True,
                 cwd=self.repo_root
             )
+
+            # If branch lookup fails and we have PR number, try by number
+            if result.returncode != 0 and pr_number is not None:
+                stderr = result.stderr.strip() if result.stderr else ""
+                if "no pull requests found" in stderr.lower():
+                    # Branch may be deleted after merge, try by PR number
+                    result = subprocess.run(
+                        ["gh", "pr", "view", str(pr_number), "--json", "state"],
+                        capture_output=True,
+                        text=True,
+                        cwd=self.repo_root
+                    )
 
             if result.returncode == 0:
                 try:
@@ -405,10 +447,10 @@ class ReleaseAutomation:
             self.commit_version_change(new_version)
 
             # Push and create PR
-            self.push_and_create_pr(branch_name, new_version)
+            pr_number = self.push_and_create_pr(branch_name, new_version)
 
             # Wait for PR merge
-            self.wait_for_pr_merge(branch_name)
+            self.wait_for_pr_merge(branch_name, pr_number=pr_number)
 
             # Sync with upstream
             self.sync_with_upstream()
