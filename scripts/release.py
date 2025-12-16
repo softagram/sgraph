@@ -22,10 +22,12 @@ Usage:
 
 import argparse
 import configparser
+import json
 import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -180,19 +182,96 @@ class ReleaseAutomation:
         else:
             print(f"\nPlease create a PR manually for branch '{branch_name}'")
 
-    def wait_for_pr_merge(self) -> None:
-        """Wait for user to confirm PR is merged."""
+    def wait_for_pr_merge(self, branch_name: str) -> None:
+        """Wait for PR to be merged.
+
+        Args:
+            branch_name: The release branch name to check PR status for
+        """
         if self.dry_run:
-            print("[DRY RUN] Would wait for PR merge confirmation")
+            print("[DRY RUN] Would wait for PR merge")
             return
+
+        # Check if gh CLI is available for automated checking
+        gh_available = subprocess.run(
+            ["which", "gh"], capture_output=True, check=False
+        ).returncode == 0
 
         if self.skip_confirmation:
-            print("\n=== Skipping PR merge wait (--yes flag) ===")
-            print("WARNING: Continuing without confirming PR merge. Make sure PR is merged before running!")
-            return
+            if not gh_available:
+                raise ReleaseError(
+                    "Cannot use --yes without gh CLI installed. "
+                    "The gh CLI is required to verify PR merge status automatically. "
+                    "Either install gh CLI or run without --yes for manual confirmation."
+                )
 
-        print("\n=== Waiting for PR merge ===")
-        input("Press Enter after the PR has been merged to continue...")
+            print("\n=== Waiting for PR merge (automated check) ===")
+            self._poll_for_pr_merge(branch_name)
+        else:
+            print("\n=== Waiting for PR merge ===")
+            input("Press Enter after the PR has been merged to continue...")
+
+    def _poll_for_pr_merge(
+        self, branch_name: str, timeout_minutes: int = 60, poll_interval_seconds: int = 10
+    ) -> None:
+        """Poll gh CLI to check if PR is merged.
+
+        Args:
+            branch_name: The branch name to check PR status for
+            timeout_minutes: Maximum time to wait for merge (default: 60)
+            poll_interval_seconds: Time between status checks (default: 10)
+        """
+        start_time = time.time()
+        timeout_seconds = timeout_minutes * 60
+
+        print(f"Polling for PR merge status every {poll_interval_seconds}s "
+              f"(timeout: {timeout_minutes} minutes)...")
+        print("Merge the PR in GitHub to continue, or press Ctrl+C to cancel.\n")
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > timeout_seconds:
+                raise ReleaseError(
+                    f"Timeout waiting for PR merge after {timeout_minutes} minutes. "
+                    "Please merge the PR and run the release script again."
+                )
+
+            result = subprocess.run(
+                ["gh", "pr", "view", branch_name, "--json", "state"],
+                capture_output=True,
+                text=True,
+                cwd=self.repo_root
+            )
+
+            if result.returncode == 0:
+                try:
+                    pr_info = json.loads(result.stdout)
+                    state = pr_info.get("state", "UNKNOWN")
+
+                    if state == "MERGED":
+                        print("\nPR has been merged! Continuing with release...")
+                        return
+
+                    if state == "CLOSED":
+                        raise ReleaseError(
+                            "PR was closed without merging. "
+                            "Please investigate and run the release process again."
+                        )
+
+                    minutes_elapsed = int(elapsed // 60)
+                    seconds_elapsed = int(elapsed % 60)
+                    print(f"  PR state: {state} ({minutes_elapsed}m {seconds_elapsed}s elapsed)")
+                except json.JSONDecodeError:
+                    print("  Warning: Could not parse PR status, retrying...")
+            else:
+                # PR might not exist yet, or other error
+                stderr = result.stderr.strip() if result.stderr else ""
+                if "no pull requests found" in stderr.lower():
+                    print("  Waiting for PR to be created...")
+                else:
+                    print("  Checking PR status...")
+
+            time.sleep(poll_interval_seconds)
 
     def sync_with_upstream(self) -> None:
         """Checkout main and pull from upstream."""
@@ -329,7 +408,7 @@ class ReleaseAutomation:
             self.push_and_create_pr(branch_name, new_version)
 
             # Wait for PR merge
-            self.wait_for_pr_merge()
+            self.wait_for_pr_merge(branch_name)
 
             # Sync with upstream
             self.sync_with_upstream()
