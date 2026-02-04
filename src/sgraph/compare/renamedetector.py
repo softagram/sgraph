@@ -133,8 +133,7 @@ class RenameDetector:
                         rename_pairs.append(pair)
                         matched_a.add(pair[0])
                         matched_b.add(pair[1])
-                        b_elem = b_children[pair[1]]
-                        b_elem.addAttribute("rename_detection_similarity_points", str(p))
+                        pair[1].addAttribute("rename_detection_similarity_points", str(p))
             else:
                 break
 
