@@ -190,3 +190,47 @@ def test_filter_model_with_attributes_ref():
     assert (original_model.createOrGetElementFromPath(e).attrs == m2.createOrGetElementFromPath(e).attrs)
     print(m2.to_deps(None))
 
+
+def test_filter_model_no_duplicate_associations():
+    """Test that filter_model does not create duplicate associations.
+
+    This test verifies the fix for issue #37 - using create_unique_element_association
+    to prevent duplicate associations when the same dependency is encountered multiple
+    times during traversal.
+    """
+    from sgraph import SGraph, SElement, SElementAssociation
+
+    # Create a model where the same association could be encountered multiple times
+    model = SGraph(SElement(None, ''))
+    a = model.createOrGetElementFromPath('/root/a')
+    b = model.createOrGetElementFromPath('/root/b')
+    c = model.createOrGetElementFromPath('/root/c')
+    external = model.createOrGetElementFromPath('/external/lib')
+
+    # Both a and b depend on external
+    SElementAssociation(a, external, 'use').initElems()
+    SElementAssociation(b, external, 'use').initElems()
+    # a also depends on b
+    SElementAssociation(a, b, 'use').initElems()
+    # c depends on a
+    SElementAssociation(c, a, 'use').initElems()
+
+    model_api = ModelApi(model=model)
+    root_elem = model.createOrGetElementFromPath('/root')
+
+    # Filter with DirectAndIndirect to traverse through multiple paths
+    subgraph = model_api.filter_model(
+        root_elem, model,
+        filter_outgoing=FilterAssocations.DirectAndIndirect,
+        filter_incoming=FilterAssocations.Ignore)
+
+    # Find the external element in the subgraph
+    external_in_subgraph = subgraph.findElementFromPath('/external/lib')
+    assert external_in_subgraph is not None
+
+    # Verify no duplicate incoming associations to external
+    # Each unique (from, to, type) combination should only appear once
+    incoming_signatures = [(ea.fromElement.getPath(), ea.deptype) for ea in external_in_subgraph.incoming]
+    assert len(incoming_signatures) == len(set(incoming_signatures)), \
+        f"Duplicate associations found: {incoming_signatures}"
+
