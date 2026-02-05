@@ -11,7 +11,7 @@ DEBUG = False
 
 class SElement:
     __slots__ = 'name', 'parent', 'children', 'childrenDict', 'outgoing', 'incoming', 'attrs', \
-        'human_readable_name'
+        'human_readable_name', '_incoming_index'
 
     name: str
     parent: Optional["SElement"]
@@ -21,6 +21,8 @@ class SElement:
     incoming: list["SElementAssociation"]
     attrs: dict[str, str | int | list[str]]
     human_readable_name: str
+    # Index for O(1) duplicate association lookup: (id(fromElement), deptype) -> assoc
+    _incoming_index: dict[tuple[int, str], "SElementAssociation"]
 
     def __init__(self, parent: Optional['SElement'], name: str):
         """
@@ -69,6 +71,7 @@ class SElement:
         self.childrenDict = {}
         self.outgoing = []
         self.incoming = []
+        self._incoming_index = {}
         self.attrs = {}
         # self.num = '0'
 

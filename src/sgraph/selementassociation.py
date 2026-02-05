@@ -36,23 +36,14 @@ class SElementAssociation:
         :returns: Return tuple of the existing
             or new element and a boolean indicating if a new element was
             created (true if new was created, false otherwise)"""
-        def filter_existing(incoming: "SElementAssociation"):
-            from_element_matches = incoming.fromElement == from_element
-            if dependency_type:
-                return dependency_type == incoming.deptype and \
-                    from_element_matches
-            else:
-                return from_element_matches
+        # O(1) lookup using the index
+        key = (id(from_element), dependency_type)
+        existing = to_element._incoming_index.get(key)
 
-        filtered_associations = filter(filter_existing, to_element.incoming)
-        existing_associations = list(filtered_associations)
-
-        # Do not create association if the same association already exists
-        if len(existing_associations) > 0:
+        if existing is not None:
             # Combine attributes to the existing association
-            existing_associations[0].attrs.update(dependency_attributes)
-            # return {'existingOrNewAssociation': existing_associations[0], 'isNew': False}
-            return existing_associations[0], False
+            existing.attrs.update(dependency_attributes)
+            return existing, False
 
         new_association = SElementAssociation(from_element, to_element, dependency_type,
                                               dependency_attributes)
@@ -114,10 +105,16 @@ class SElementAssociation:
     def initElems(self):
         self.fromElement.outgoing.append(self)
         self.toElement.incoming.append(self)
+        # Maintain index for O(1) duplicate lookup
+        key = (id(self.fromElement), self.deptype)
+        self.toElement._incoming_index[key] = self
 
     def remove(self):
         self.fromElement.outgoing.remove(self)
         self.toElement.incoming.remove(self)
+        # Maintain index for O(1) duplicate lookup
+        key = (id(self.fromElement), self.deptype)
+        self.toElement._incoming_index.pop(key, None)
 
     def addAttribute(self, attr_name: str, attr_val: str | int | list[str]):
         self.attrs[attr_name] = attr_val

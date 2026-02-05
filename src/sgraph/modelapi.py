@@ -229,12 +229,11 @@ class ModelApi:
             new_or_existing_referred_elem, this_is_new = sub_graph.create_or_get_element(x)
 
             if is_outgoing:
-                SElementAssociation(other, new_or_existing_referred_elem, ea.deptype,
-                                    ea.attrs).initElems()
+                SElementAssociation.create_unique_element_association(
+                    other, new_or_existing_referred_elem, ea.deptype, ea.attrs)
             else:
-
-                SElementAssociation(new_or_existing_referred_elem, other, ea.deptype,
-                                    ea.attrs).initElems()
+                SElementAssociation.create_unique_element_association(
+                    new_or_existing_referred_elem, other, ea.deptype, ea.attrs)
 
             return new_or_existing_referred_elem, this_is_new
 
