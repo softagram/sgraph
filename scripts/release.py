@@ -2,34 +2,39 @@
 """
 Release automation script for sgraph.
 
-This script automates the release process described in releasing.md:
-1. Validates preconditions (clean working directory, on main branch)
-2. Bumps version in setup.cfg
-3. Creates release branch and commits changes
-4. Pushes branch and creates PR (requires gh CLI)
-5. After PR merge, creates git tag
-6. Builds distribution packages
-7. Uploads to PyPI (requires twine)
-8. Creates GitHub release (requires gh CLI)
-9. Syncs main branch with upstream
+This script automates the release process in two phases:
 
-Usage:
+PHASE 1 - Prepare release (creates PR):
+    python scripts/release.py --bump patch
+    python scripts/release.py --bump minor
+    python scripts/release.py --bump major
     python scripts/release.py --version 1.2.0
-    python scripts/release.py --bump patch  # auto-increment patch version
-    python scripts/release.py --bump minor  # auto-increment minor version
-    python scripts/release.py --bump major  # auto-increment major version
+
+    This will:
+    1. Validate preconditions (clean working directory, on main branch)
+    2. Bump version in setup.cfg
+    3. Create release branch and commit changes
+    4. Push branch and create PR (requires gh CLI)
+    5. Exit with instructions to run phase 2 after merging
+
+PHASE 2 - Complete release (after PR is merged):
+    python scripts/release.py --complete 1.2.5
+
+    This will:
+    1. Sync main branch with upstream
+    2. Create and push git tag
+    3. Build distribution packages
+    4. Upload to PyPI (requires twine)
+    5. Create GitHub release (requires gh CLI)
 """
 
 import argparse
 import configparser
-import json
-import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 
 class ReleaseError(Exception):
@@ -208,113 +213,6 @@ class ReleaseAutomation:
             return int(match.group(1))
         return None
 
-    def wait_for_pr_merge(self, branch_name: str, pr_number: Optional[int] = None) -> None:
-        """Wait for PR to be merged.
-
-        Args:
-            branch_name: The release branch name to check PR status for
-            pr_number: Optional PR number for fallback polling after branch deletion
-        """
-        if self.dry_run:
-            print("[DRY RUN] Would wait for PR merge")
-            return
-
-        # Check if gh CLI is available for automated checking
-        gh_available = subprocess.run(
-            ["which", "gh"], capture_output=True, check=False
-        ).returncode == 0
-
-        if self.skip_confirmation:
-            if not gh_available:
-                raise ReleaseError(
-                    "Cannot use --yes without gh CLI installed. "
-                    "The gh CLI is required to verify PR merge status automatically. "
-                    "Either install gh CLI or run without --yes for manual confirmation."
-                )
-
-            print("\n=== Waiting for PR merge (automated check) ===")
-            self._poll_for_pr_merge(branch_name, pr_number=pr_number)
-        else:
-            print("\n=== Waiting for PR merge ===")
-            input("Press Enter after the PR has been merged to continue...")
-
-    def _poll_for_pr_merge(
-        self, branch_name: str, timeout_minutes: int = 60, poll_interval_seconds: int = 10,
-        pr_number: Optional[int] = None
-    ) -> None:
-        """Poll gh CLI to check if PR is merged.
-
-        Args:
-            branch_name: The branch name to check PR status for
-            timeout_minutes: Maximum time to wait for merge (default: 60)
-            poll_interval_seconds: Time between status checks (default: 10)
-            pr_number: Optional PR number to use as fallback when branch lookup fails
-        """
-        start_time = time.time()
-        timeout_seconds = timeout_minutes * 60
-
-        print(f"Polling for PR merge status every {poll_interval_seconds}s "
-              f"(timeout: {timeout_minutes} minutes)...")
-        print("Merge the PR in GitHub to continue, or press Ctrl+C to cancel.\n")
-
-        while True:
-            elapsed = time.time() - start_time
-            if elapsed > timeout_seconds:
-                raise ReleaseError(
-                    f"Timeout waiting for PR merge after {timeout_minutes} minutes. "
-                    "Please merge the PR and run the release script again."
-                )
-
-            # Try to get PR status by branch name first
-            result = subprocess.run(
-                ["gh", "pr", "view", branch_name, "--json", "state"],
-                capture_output=True,
-                text=True,
-                cwd=self.repo_root
-            )
-
-            # If branch lookup fails and we have PR number, try by number
-            if result.returncode != 0 and pr_number is not None:
-                stderr = result.stderr.strip() if result.stderr else ""
-                if "no pull requests found" in stderr.lower():
-                    # Branch may be deleted after merge, try by PR number
-                    result = subprocess.run(
-                        ["gh", "pr", "view", str(pr_number), "--json", "state"],
-                        capture_output=True,
-                        text=True,
-                        cwd=self.repo_root
-                    )
-
-            if result.returncode == 0:
-                try:
-                    pr_info = json.loads(result.stdout)
-                    state = pr_info.get("state", "UNKNOWN")
-
-                    if state == "MERGED":
-                        print("\nPR has been merged! Continuing with release...")
-                        return
-
-                    if state == "CLOSED":
-                        raise ReleaseError(
-                            "PR was closed without merging. "
-                            "Please investigate and run the release process again."
-                        )
-
-                    minutes_elapsed = int(elapsed // 60)
-                    seconds_elapsed = int(elapsed % 60)
-                    print(f"  PR state: {state} ({minutes_elapsed}m {seconds_elapsed}s elapsed)")
-                except json.JSONDecodeError:
-                    print("  Warning: Could not parse PR status, retrying...")
-            else:
-                # PR might not exist yet, or other error
-                stderr = result.stderr.strip() if result.stderr else ""
-                if "no pull requests found" in stderr.lower():
-                    print("  Waiting for PR to be created...")
-                else:
-                    print("  Checking PR status...")
-
-            time.sleep(poll_interval_seconds)
-
     def sync_with_upstream(self) -> None:
         """Checkout main and pull from upstream."""
         print("\n=== Syncing with upstream ===")
@@ -409,8 +307,8 @@ class ReleaseAutomation:
             "--latest"
         ])
 
-    def release(self, version: Optional[str] = None, bump: Optional[str] = None) -> None:
-        """Execute the full release process."""
+    def prepare_release(self, version: Optional[str] = None, bump: Optional[str] = None) -> None:
+        """Phase 1: Create release PR."""
         try:
             # Validate preconditions
             self.validate_preconditions()
@@ -447,16 +345,39 @@ class ReleaseAutomation:
             self.commit_version_change(new_version)
 
             # Push and create PR
-            pr_number = self.push_and_create_pr(branch_name, new_version)
+            self.push_and_create_pr(branch_name, new_version)
 
-            # Wait for PR merge
-            self.wait_for_pr_merge(branch_name, pr_number=pr_number)
+            # Print next steps
+            print(f"\n{'='*60}")
+            print(f"Phase 1 complete: PR created for release {new_version}")
+            print(f"{'='*60}")
+            print(f"\nNext steps:")
+            print(f"  1. Review and merge the PR in GitHub")
+            print(f"  2. Run: python scripts/release.py --complete {new_version}")
+            print(f"{'='*60}")
+
+        except ReleaseError as e:
+            print(f"\nERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+        except subprocess.CalledProcessError as e:
+            print(f"\nCommand failed: {e.cmd}", file=sys.stderr)
+            if e.stderr:
+                print(e.stderr, file=sys.stderr)
+            sys.exit(1)
+        except KeyboardInterrupt:
+            print("\n\nRelease cancelled by user.")
+            sys.exit(1)
+
+    def complete_release(self, version: str) -> None:
+        """Phase 2: Complete release after PR is merged."""
+        try:
+            print(f"\n=== Completing release {version} ===")
 
             # Sync with upstream
             self.sync_with_upstream()
 
             # Create git tag
-            self.create_git_tag(new_version)
+            self.create_git_tag(version)
 
             # Build distribution
             self.build_distribution()
@@ -470,10 +391,10 @@ class ReleaseAutomation:
             self.upload_to_pypi()
 
             # Create GitHub release
-            self.create_github_release(new_version)
+            self.create_github_release(version)
 
             print(f"\n{'='*60}")
-            print(f"Release {new_version} completed successfully!")
+            print(f"Release {version} completed successfully!")
             print(f"{'='*60}")
 
         except ReleaseError as e:
@@ -495,35 +416,35 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Release specific version
-  python scripts/release.py --version 1.2.0
+  # PHASE 1: Create release PR
+  python scripts/release.py --bump patch      # Auto-bump patch (1.1.1 -> 1.1.2)
+  python scripts/release.py --bump minor      # Auto-bump minor (1.1.1 -> 1.2.0)
+  python scripts/release.py --bump major      # Auto-bump major (1.1.1 -> 2.0.0)
+  python scripts/release.py --version 1.2.0   # Specific version
 
-  # Auto-bump patch version (1.1.1 -> 1.1.2)
-  python scripts/release.py --bump patch
-
-  # Auto-bump minor version (1.1.1 -> 1.2.0)
-  python scripts/release.py --bump minor
-
-  # Auto-bump major version (1.1.1 -> 2.0.0)
-  python scripts/release.py --bump major
+  # PHASE 2: Complete release (after PR is merged)
+  python scripts/release.py --complete 1.2.5
 
   # Dry run to see what would happen
   python scripts/release.py --bump patch --dry-run
-
-  # Test with uncommitted changes (useful during development)
-  python scripts/release.py --bump patch --dry-run --allow-uncommitted-changes
+  python scripts/release.py --complete 1.2.5 --dry-run
         """
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--version",
-        help="Specific version to release (e.g., 1.2.0)"
+        help="Phase 1: Specific version to release (e.g., 1.2.0)"
     )
     group.add_argument(
         "--bump",
         choices=["major", "minor", "patch"],
-        help="Automatically bump version (major, minor, or patch)"
+        help="Phase 1: Automatically bump version (major, minor, or patch)"
+    )
+    group.add_argument(
+        "--complete",
+        metavar="VERSION",
+        help="Phase 2: Complete release after PR is merged (e.g., --complete 1.2.5)"
     )
 
     parser.add_argument(
@@ -551,7 +472,11 @@ Examples:
         allow_uncommitted_changes=args.allow_uncommitted_changes,
         skip_confirmation=args.yes
     )
-    automation.release(version=args.version, bump=args.bump)
+
+    if args.complete:
+        automation.complete_release(version=args.complete)
+    else:
+        automation.prepare_release(version=args.version, bump=args.bump)
 
 
 if __name__ == "__main__":
