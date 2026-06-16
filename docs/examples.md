@@ -463,47 +463,56 @@ def create_interactive_visualization(model_path):
 
 ```python
 from sgraph.compare.modelcompare import ModelCompare
-from sgraph.modelapi import ModelApi
 
 def compare_model_versions(old_model_path, new_model_path):
     """
-    Compare two versions of a model to track changes
+    Compare two versions of a model to track changes.
+
+    ModelCompare.compare() returns a *compare model* (an SGraph) with the
+    differences annotated as attributes. getCompareInfos() turns that compare
+    model into structured lists.
     """
     comparer = ModelCompare()
-    comparison = comparer.compare(old_model_path, new_model_path)
-    
+    compare_model = comparer.compare(old_model_path, new_model_path)
+
+    # getCompareInfos returns a 6-tuple. Note the order:
+    # (new_deps, removed_deps, changed_elems, new_elems, removed_elems, attr_changes)
+    (new_deps, removed_deps, changed_elems,
+     new_elems, removed_elems, attr_changes) = comparer.getCompareInfos(compare_model)
+
     print("=== Model Evolution Analysis ===")
     print(f"Old model: {old_model_path}")
     print(f"New model: {new_model_path}")
     print("=" * 40)
-    
-    # Analyze changes
-    added_elements = comparison.get('added_elements', [])
-    removed_elements = comparison.get('removed_elements', [])
-    modified_elements = comparison.get('modified_elements', [])
-    
-    print(f"📈 Added elements: {len(added_elements)}")
-    for elem in added_elements[:5]:
-        print(f"   + {elem}")
-    if len(added_elements) > 5:
-        print(f"   ... and {len(added_elements) - 5} more")
-    
-    print(f"\n📉 Removed elements: {len(removed_elements)}")
-    for elem in removed_elements[:5]:
-        print(f"   - {elem}")
-    if len(removed_elements) > 5:
-        print(f"   ... and {len(removed_elements) - 5} more")
-    
-    print(f"\n🔄 Modified elements: {len(modified_elements)}")
-    for elem in modified_elements[:5]:
-        print(f"   ~ {elem}")
-    if len(modified_elements) > 5:
-        print(f"   ... and {len(modified_elements) - 5} more")
-    
-    return comparison
+
+    # new_elems / removed_elems are lists of ("parent/name", SElement) tuples.
+    print(f"📈 Added elements: {len(new_elems)}")
+    for label, elem in new_elems[:5]:
+        print(f"   + {elem.getPath()}")
+    if len(new_elems) > 5:
+        print(f"   ... and {len(new_elems) - 5} more")
+
+    print(f"\n📉 Removed elements: {len(removed_elems)}")
+    for label, elem in removed_elems[:5]:
+        print(f"   - {elem.getPath()}")
+    if len(removed_elems) > 5:
+        print(f"   ... and {len(removed_elems) - 5} more")
+
+    # changed_elems is a list of (SElement, change_count) tuples.
+    print(f"\n🔄 Changed elements: {len(changed_elems)}")
+    for elem, change_count in changed_elems[:5]:
+        print(f"   ~ {elem.getPath()} ({change_count} changes)")
+    if len(changed_elems) > 5:
+        print(f"   ... and {len(changed_elems) - 5} more")
+
+    # new_deps / removed_deps are lists of (SElementAssociation, length) tuples.
+    print(f"\n🔗 Added dependencies: {len(new_deps)},"
+          f" removed: {len(removed_deps)}")
+
+    return compare_model
 
 # Usage
-# evolution = compare_model_versions('v1.0_model.xml', 'v2.0_model.xml')
+# compare_model = compare_model_versions('v1.0_model.xml', 'v2.0_model.xml')
 ```
 
 ### Example 10: Custom Metrics Calculation

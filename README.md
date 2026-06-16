@@ -159,6 +159,28 @@ python -m sgraph.cypher model.xml.zip -f dot 'MATCH (a)-[r]->(b) RETURN a, r, b'
 
 See the [Cypher documentation](https://softagram.github.io/sgraph/cypher.html) for full details and query examples.
 
+### Comparing models
+
+Two models can be compared to see what was added, removed, or changed:
+
+```python
+from sgraph.compare.modelcompare import ModelCompare
+
+mc = ModelCompare()
+compare_model = mc.compare('old_model.xml', 'new_model.xml')  # returns an SGraph
+mc.printCompareInfos(compare_model)
+```
+
+A CLI is also available (exit codes follow `git diff`: `0` = no differences, `1` = differences, `2` = error):
+
+```bash
+python -m sgraph.cli.compare old_model.xml new_model.xml            # human-readable summary
+python -m sgraph.cli.compare old_model.xml new_model.xml -f json    # machine-readable JSON
+python -m sgraph.cli.compare old_model.xml new_model.xml --rename-detection
+```
+
+See the [API reference](https://softagram.github.io/sgraph/api-reference.html#comparison) for the full comparison API.
+
 ## Current utilization
 [Softagram](https://github.com/softagram) uses it for building up the information model about the 
 analyzed software.
