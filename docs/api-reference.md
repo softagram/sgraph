@@ -380,16 +380,59 @@ filtering = SGraphFiltering(model)
 from sgraph.compare.modelcompare import ModelCompare
 
 comparer = ModelCompare()
-result = comparer.compare('old_model.xml', 'new_model.xml')
+# Returns a *compare model* (an SGraph), not a plain dict.
+compare_model = comparer.compare('old_model.xml', 'new_model.xml')
 ```
 
-#### Methods
+`compare()` / `compareModels()` return a new `SGraph` (the "compare model") in
+which differences are annotated as element/association attributes (`compare`,
+`_only_in`, `_changed_dep`, `_change_count`, `_attr_diff`, ...). Use the
+`getCompareInfos()` / `printCompareInfos()` helpers, or the individual
+extractors below, to turn that compare model into structured results.
 
-##### `compare(old_model: str, new_model: str) -> Dict`
-Compares two models and returns differences.
+#### Building the compare model
 
-##### `calculateSimilarity(old_model: str, new_model: str) -> float`
-Calculates similarity score between models.
+##### `compare(path1: str, path2: str, exclude_attrs: set[str] | None = None) -> SGraph`
+Loads two models from XML (or zipped XML) file paths and compares them.
+
+##### `compareModels(model1: SGraph, model2: SGraph, rename_detection: bool = False, exclude_attrs: set[str] | None = None) -> SGraph`
+Compares two already-loaded in-memory models.
+
+`exclude_attrs` is a set of attribute names to ignore during comparison. The
+preset `SLIDING_WINDOW_ATTRS` (from `sgraph.compare.compareutils`) suppresses
+time-windowed metric noise (author/commit/bug counts, `last_modified`, etc.):
+
+```python
+from sgraph.compare.compareutils import SLIDING_WINDOW_ATTRS
+
+compare_model = comparer.compare('a.xml', 'b.xml', exclude_attrs=SLIDING_WINDOW_ATTRS)
+```
+
+#### Reading the results
+
+##### `getCompareInfos(compare_model: SGraph) -> tuple`
+Returns a 6-tuple:
+`(new_deps, removed_deps, changed_elems, new_elems, removed_elems, attr_changes)`.
+
+##### `printCompareInfos(compare_model: SGraph) -> tuple`
+Prints a human-readable summary and returns the same 6-tuple as `getCompareInfos()`.
+
+The tuple elements are:
+
+| Field | Shape | Meaning |
+|-------|-------|---------|
+| `new_deps` | `list[(SElementAssociation, int)]` | Added dependencies with dependency length, longest first |
+| `removed_deps` | `list[(SElementAssociation, int)]` | Removed dependencies with dependency length, longest first |
+| `changed_elems` | `list[(SElement, int)]` | Elements with a change count, highest first |
+| `new_elems` | `list[(str, SElement)]` | Added elements as `("parent/name", element)` |
+| `removed_elems` | `list[(str, SElement)]` | Removed elements as `("parent/name", element)` |
+| `attr_changes` | `list[(SElement, str)]` | Elements whose attributes changed, with the diff string |
+
+Individual extractors are also available: `newAndRemovedElems()`,
+`newAndRemovedDependenciesLists()`, `elemsWithChanges()`,
+`elemsWithAttrChanges()`, `uniqueConnectionsCreated()`,
+`uniqueConnectionsRemoved()`, `externalChanges()`, and
+`getElementsWithAttrDiff(compare_model, attribute)`.
 
 ## CLI Tools
 
@@ -419,6 +462,42 @@ Options:
 - `--exclude PATTERN` - Exclude elements matching pattern
 - `--type TYPE` - Filter by element type
 - `--output FILE` - Output file path
+
+### compare
+
+Compare two models and report the differences (added/removed/changed elements
+and dependencies). `MODEL_A` is the "before"/old model, `MODEL_B` the
+"after"/new model.
+
+```bash
+# Human-readable summary
+python -m sgraph.cli.compare old_model.xml new_model.xml
+
+# Machine-readable, pretty-printed JSON
+python -m sgraph.cli.compare old_model.xml new_model.xml -f json
+```
+
+Options:
+- `-f, --format {text,json}` - Output format (default: `text`; `text` reuses `ModelCompare.printCompareInfos()`)
+- `-o, --output FILE` - Write output to a file instead of stdout
+- `--rename-detection` - Detect renamed elements (collapses an add+remove into a single changed element annotated with `old_name`)
+- `--exclude-attrs a,b,c` - Comma-separated attribute names to ignore during comparison
+
+Exit codes follow `git diff` conventions:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Models are equivalent (no differences) |
+| `1` | Differences were found |
+| `2` | Error (bad path, parse failure, or usage error) |
+
+This makes it usable as a change gate in scripts/CI:
+
+```bash
+if ! python -m sgraph.cli.compare before.xml after.xml -f json -o diff.json; then
+    echo "Model changed — see diff.json"
+fi
+```
 
 ## Exceptions
 
