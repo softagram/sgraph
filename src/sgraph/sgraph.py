@@ -738,6 +738,8 @@ class SGraph:
                     name = attrs.get('n')
 
                     if self.currentRelation is not None:
+                        if self.ignore_all_assoc_attributes:
+                            return
                         if name in self.blacklisted_assoc_attributes:
                             return
                         if self.whitelisted_assoc_attributes:
@@ -748,6 +750,8 @@ class SGraph:
                         self.currentRelation[self._shared(name)] = self._shared(value)
                     else:
                         if self.currentElement is not None and len(self.currentElementPath) > 0:
+                            if self.ignore_all_elem_attributes:
+                                return
                             if name in self.blacklisted_elem_attributes:
                                 return
                             if self.whitelisted_elem_attributes:
@@ -814,9 +818,20 @@ class SGraph:
                     elif referred is not None:
                         self.createReference(referred, t)
 
+                    # 'r' and 't' carry the reference and the dependency type, not user
+                    # attributes, and are excluded by the length test. The rest are
+                    # association attributes and obey the same filters as <a> children do.
                     for aname, avalue in list(attrs.items()):
                         if len(aname) > 1:
-                            self.currentRelation[self._shared(aname)] = self._shared(avalue)
+                            if not self.ignore_all_assoc_attributes:
+                                if aname not in self.blacklisted_assoc_attributes:
+                                    if self.whitelisted_assoc_attributes:
+                                        if aname in self.whitelisted_assoc_attributes:
+                                            self.currentRelation[self._shared(aname)] = \
+                                                self._shared(avalue)
+                                    else:
+                                        self.currentRelation[self._shared(aname)] = \
+                                            self._shared(avalue)
 
             def endElement(self, name: str):
                 if name == 'e':
