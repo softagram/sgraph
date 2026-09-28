@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 import sys
 from collections import Counter, defaultdict
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from sgraph import SGraph, SElement
 from sgraph.converters.external_root_semantics import (canonical_purl_name,
@@ -584,6 +585,130 @@ def bom_ref(elem, v):
     return purl_for(elem, v)[0]
 
 
+# The attribute an analyzer stamps with the registry a package was actually fetched from. Neutral
+# across ecosystems on purpose, the same way 'package_name'/'version'/'ecosystem' are: NuGet reads
+# it from the '.nupkg.metadata' the restore writes beside every package, npm from the lockfile's
+# resolved URL reduced to the registry it names, and a third ecosystem needs no branch here to be
+# served. The value is expected to be the registry, not the artifact: a tarball URL would give
+# every version of a package a different source and make agreement across a merge accidental.
+PACKAGE_SOURCE_ATTRIBUTE = 'package_source'
+
+# Where the source is stated whenever it is known, the public registry included. purl cannot say
+# "unknown": an absent repository_url already means "the type's default registry", so without
+# this property a package confirmed to come from the public registry and one whose source nobody
+# recorded would be indistinguishable in the document.
+PACKAGE_SOURCE_PROPERTY = 'softagram:packageSource'
+
+# purl defines this qualifier for exactly this fact: the repository a package came from when it is
+# not the ecosystem's default one. Emitting it is what lets a consumer tell a package from the
+# public registry from one that only an authenticated internal feed serves - which, for a
+# vulnerability consumer, is the difference between a match it can trust and a name collision.
+REPOSITORY_URL_QUALIFIER = 'repository_url'
+
+# The hosts of each purl type's default registry, for which the qualifier is omitted. The first
+# host of each entry is the 'Default Repository URL' of the purl type definition; the others are
+# spellings of that same public registry - the ones the type definition itself names (maven's
+# repo1 mirror, pypi's previous host), and the ones the ecosystems' own clients write: Yarn v1
+# lockfiles resolve public packages through registry.yarnpkg.com, a NuGet restore records the
+# api.nuget.org service index, and older nuget.config files name the bare nuget.org host. Matched
+# on the host alone, because the public registry is the host whatever path the client recorded.
+#
+# Qualifying a package from the default registry would not be false, but it would be redundant by
+# the spec's own definition, and it would change the purl string of nearly every public component
+# in the document: a consumer comparing purls as strings would stop matching the very rows whose
+# identity is least in doubt.
+DEFAULT_REPOSITORY_HOSTS = {
+    'npm': {'registry.npmjs.org', 'registry.yarnpkg.com'},
+    'nuget': {'www.nuget.org', 'nuget.org', 'api.nuget.org'},
+    'pypi': {'pypi.org', 'pypi.python.org'},
+    'maven': {'repo.maven.apache.org', 'repo1.maven.org'},
+    'docker': {'hub.docker.com'},
+    'gem': {'rubygems.org'},
+}
+
+# The purl types this module emits whose type definition names no default registry, so any known
+# source is qualified. Every emitted type is in exactly one of these two tables; a test derives the
+# emitted types from the code that builds purls and holds both tables to that, so a purl type
+# added later cannot silently qualify its public registry.
+NO_DEFAULT_REPOSITORY_TYPES = {'deb', 'golang', 'generic'}
+
+
+DEFAULT_PORT_BY_SCHEME = {'http': 80, 'https': 443}
+
+
+def package_source_of(elem):
+    """The element's package source as a URL fit to publish, or None when there is none.
+
+    Absent or blank means unknown, and so does a value that is not an http(s) URL with a host. A
+    NuGet source can be a local directory, and a filesystem path is not a repository URL: it would
+    publish the layout of the analysis host, user names included, and identify nothing a consumer
+    could reach. Treated as unknown rather than guessed at.
+
+    What is published is the scheme, host, port and path, and nothing else. User info and the
+    query are where registry credentials usually travel - 'https://user:token@host/feed',
+    '?token=...' - and an SBOM is a document that leaves the organisation, so they are dropped
+    here, at the last point before it does. The fragment names nothing on the server. What this
+    does NOT catch is a token embedded in the path itself, as some hosted feeds issue them: no
+    rule could tell such a segment from a feed name, so keeping it out of the model is the
+    analyzer's job.
+
+    The host is normalised so that spellings of one registry agree when duplicates are merged
+    and when the default registry is recognised: its trailing dot, a port that is the scheme's
+    default, and the path's trailing slash are dropped.
+
+    A backslash anywhere makes the value unknown. urlsplit reads 'https://a.example\\@b.example'
+    as host b.example where a WHATWG parser reads a.example, so the host this function would
+    publish, and judge public or private, is not necessarily the one the client fetched from.
+    """
+    raw = (elem.attrs.get(PACKAGE_SOURCE_ATTRIBUTE) or '').strip()
+    if not raw or '\\' in raw:
+        return None
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or '').rstrip('.')
+    if scheme not in DEFAULT_PORT_BY_SCHEME or not host:
+        return None
+    if ':' in host:
+        host = f'[{host}]'
+    netloc = host if port in (None, DEFAULT_PORT_BY_SCHEME[scheme]) else f'{host}:{port}'
+    return urlunsplit((scheme, netloc, parts.path.rstrip('/'), '', ''))
+
+
+def source_qualified_purl(purl, source):
+    """`purl` with a package source appended as a qualifier, unless it is the default registry.
+
+    Applied to the emitted 'purl' and deliberately NOT to 'bom-ref'. dedup_key folds on the ref
+    and every dependency edge resolves through it, so a qualifier there would turn one package
+    fetched from two feeds into two components and leave each consumer pointing at a different
+    one. The identity stays the package; the qualifier states where these bytes came from.
+
+    The value is percent-encoded as the purl standard requires of a qualifier value: everything
+    but the alphanumerics, '.-_~' and ':' - the slashes included, as in every repository_url
+    example the standard gives. Left raw, '&' or '=' would split the qualifier segment and
+    silently truncate the URL.
+
+    A purl that already contains '?' or '#' gets no qualifier. Versions are spliced in unencoded,
+    so a git-shaped version such as 'github:user/repo#abc123' already opens a subpath, and a
+    qualifier appended after it would be read as part of that subpath rather than as a
+    qualifier. It also keeps purl_without_qualifiers exact: the first '?' is always the one
+    added here. The softagram:packageSource property still states the source for such a row.
+    """
+    if source is None or '?' in purl or '#' in purl:
+        return purl
+    if urlsplit(source).hostname in DEFAULT_REPOSITORY_HOSTS.get(purl_type_of(purl), ()):
+        return purl
+    return f'{purl}?{REPOSITORY_URL_QUALIFIER}={quote(source, safe=":")}'
+
+
+def purl_without_qualifiers(purl):
+    """The identity half of a purl: everything before the qualifier segment."""
+    return purl.split('?', 1)[0]
+
+
 # The SPDX identifiers this converter is prepared to put in license.id, each with its canonical
 # url. Deliberately a short list of values someone has actually checked rather than a mapping
 # guessed from license strings: CycloneDX $refs the SPDX identifier list from license.id, so a
@@ -763,6 +888,23 @@ def merge_component_evidence(surviving, duplicate):
                 prop for prop in surviving['properties'] if prop['name'] != NAME_RESOLUTION_PROPERTY
             ]
 
+    # Same rule, same reason, for where the bytes came from: the source describes THIS row, and
+    # after a merge the row is about every element that folded into it. It survives only when all
+    # of them say the same thing. A disagreement is not resolved to whichever element document
+    # order happened to traverse first, and an element that says nothing does not corroborate one
+    # that does -- 'unknown' is not agreement. The property is compared rather than the qualifier:
+    # the qualifier is derived from it and omits the public registry, so two rows without one may
+    # still disagree. Dropped from 'purl' only, which is why the qualifier was kept out of
+    # 'bom-ref': identity cannot change here, because callers have already resolved edges through
+    # it.
+    surviving_source = _property(surviving, PACKAGE_SOURCE_PROPERTY)
+    duplicate_source = _property(duplicate, PACKAGE_SOURCE_PROPERTY)
+    if surviving_source != duplicate_source:
+        if surviving_source is not None:
+            surviving['properties'].remove(surviving_source)
+        if 'purl' in surviving:
+            surviving['purl'] = purl_without_qualifiers(surviving['purl'])
+
 
 def finalize_components(components):
     """Re-render the evidence-derived properties and drop the collection-time key.
@@ -851,6 +993,9 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
         custom_properties = []  # noqa
         custom_properties.append({'name': 'sourceCodeReferences', 'value': direct_deps_paths})
         custom_properties.extend(purl_properties)
+        source = package_source_of(elem)
+        if source is not None:
+            custom_properties.append({'name': PACKAGE_SOURCE_PROPERTY, 'value': source})
 
         if indirect_deps:
             # str(): CycloneDX types properties[].value as a string, so a bare int here
@@ -868,7 +1013,7 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
             'name': repaired_name if repaired_name is not None else clean_name(elem.name),
             'version': v,
             'bom-ref': ref,
-            'purl': ref,
+            'purl': source_qualified_purl(ref, source),
             'type': cyclonedx_component_type(ref),
             'licenses': licenses,
             'scope': 'required',
