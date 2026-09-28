@@ -442,6 +442,47 @@ document's own subject, and not a 3rd-party package. It appears as a component m
 - Components describing internal packages carry **no** `dependencyDepth`. That property counts
   package hops through the 3rd-party closure, and an element of the estate is not one.
 
+### Where a package was fetched from
+
+When the analyzer records the registry a 3rd-party package was restored from, the component says
+so. A package from a private feed carries it in the purl as the `repository_url` qualifier:
+
+```json
+{ "bom-ref": "pkg:nuget/Example.Internal.Core@1.4.0",
+  "purl": "pkg:nuget/Example.Internal.Core@1.4.0?repository_url=https:%2F%2Fpkgs.example.org%2Ffeed%2Fnuget%2Fv3%2Findex.json",
+  "properties": [
+    { "name": "softagram:packageSource", "value": "https://pkgs.example.org/feed/nuget/v3/index.json" }
+  ] }
+```
+
+| Field | Meaning |
+|-------|---------|
+| `purl` `repository_url` qualifier | The registry the package came from, **only when it is not the type's default registry**. An unqualified purl means the default registry, as the purl specification defines. |
+| `properties[softagram:packageSource]` | The same registry, **whenever it is known**, the public one included. Absent when the source is unknown. |
+
+- **The property is what tells "public" from "unknown".** Both leave the purl unqualified, so a
+  consumer looking for packages from outside the public registry reads the qualifier, and one
+  that needs to know the source was actually recorded reads the property.
+- **`bom-ref` never carries the qualifier.** One package restored from two feeds is still one
+  component, and every dependency edge names it by the same ref.
+- **When the merged occurrences of a package disagree about their source, or some of them do not
+  state one, both the qualifier and the property are dropped.** The document does not pick one
+  checkout's answer for all of them.
+- **The default registries** are the purl type definitions' own, recognised by host together
+  with the other spellings of the same registry: `registry.npmjs.org` and `registry.yarnpkg.com`
+  for npm; `www.nuget.org`, `nuget.org` and `api.nuget.org` for NuGet; `pypi.org` and
+  `pypi.python.org`; `repo.maven.apache.org` and `repo1.maven.org`; `hub.docker.com`;
+  `rubygems.org`. `deb`, `golang` and `generic` have no default registry, so any known source is
+  qualified.
+- **Only the scheme, host, port and path are published.** User info, query and fragment are
+  removed, because that is where registry credentials usually travel. **A token embedded in the
+  path itself is not detected** — no rule can tell such a segment from a feed name — so keeping
+  it out of the model is the analyzer's responsibility. A source that is not an http(s) URL,
+  such as a local feed directory, or that contains a backslash, is treated as unknown.
+- **A purl whose version already contains `?` or `#`** — a git-shaped version such as
+  `github:user/repo#abc123` — gets no qualifier, because it would land inside the subpath. The
+  property still states the source.
+
 ### What the document does not cover
 
 A component list cannot say what is missing from it. An external the analyzer saw and the
