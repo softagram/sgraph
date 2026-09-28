@@ -6,4 +6,4 @@ pytest==9.0.3
 deprecation==2.1.0
 
 # Optional: Cypher query support (python -m sgraph.cypher)
-spycy-aneeshdurg==0.0.3
+spycy-aneeshdurg==0.1.0
