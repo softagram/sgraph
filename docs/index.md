@@ -9,7 +9,7 @@ description: "A powerful Python library for representing and analyzing software 
 
 [![PyPI version](https://badge.fury.io/py/sgraph.svg)](https://badge.fury.io/py/sgraph)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/release/python-380/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 
 **sgraph** is a powerful Python library that provides data formats, structures, and algorithms for working with hierarchical graph structures. It's particularly suited for representing and analyzing software architectures, dependencies, and complex system relationships.
 

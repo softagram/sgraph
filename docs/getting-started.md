@@ -10,7 +10,7 @@ This guide will help you get up and running with sgraph in just a few minutes.
 
 ## Installation
 
-sgraph requires Python 3.8 or higher. Install it using pip:
+sgraph requires Python 3.11 or higher. Install it using pip:
 
 ```bash
 pip install sgraph
