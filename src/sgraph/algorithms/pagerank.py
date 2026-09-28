@@ -1,6 +1,7 @@
 
 from sgraph import SGraph
 
+
 def calculate_page_rank(graph: SGraph,
                         d: float = 0.85,
                         max_iterations: int = 100,
@@ -30,9 +31,9 @@ def calculate_page_rank(graph: SGraph,
         all_elements.append(node)
         for child in node.children:
             stack.append(child)
-    
+
     N = len(all_elements)
-    
+
     # Handle empty graph case
     if not graph.rootNode.children:
         return

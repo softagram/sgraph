@@ -36,7 +36,6 @@ class RenameDetector:
                 if c_b is not None:
                     self.identify_rename_pairs(c_a, c_b, renamed_elem__old_name)
 
-
     def identify_renamed_children(self, a_children: dict[str, SElement], b_children: dict[str, SElement],
                                   rename_pairs: list[tuple[SElement, SElement]]):
         """
@@ -144,4 +143,3 @@ class RenameDetector:
             compareElem.addAttribute('renamed', 'true')
             compareElem.addAttribute('old_name', old_name)
             tag_change_count(compareElem, 1)
-

@@ -122,6 +122,7 @@ def elem_similarity(elem_a, elem_b, points_level, return_points):
     else:
         return points > 90
 
+
 def compare_parameters(elem_a: SElement, elem_b: SElement):
     """
     params is like "self;email;team_id;password;name"
@@ -142,4 +143,3 @@ def compare_parameters(elem_a: SElement, elem_b: SElement):
             else:
                 raise Exception('Unexpected situation in compare_parameters, params not strings..')
     return 0
-

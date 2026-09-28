@@ -38,7 +38,6 @@ def generalize_model(model: SGraph, level_to_generalize: int = 3,
     for root_child in model.rootNode.children:
         recurse_elements(root_child, 1, None)
 
-
     old_to_new = copy_model_and_build_map(level_to_generalize, generalized_model, model, have_element_attrs)
 
     # Now we have the generalized_model and the original model similar up to the level LEVEL,
@@ -161,5 +160,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-

@@ -9,7 +9,6 @@ from sgraph.compare.compareutils import tag_change_count, debunk_uniqueness, ign
 from sgraph.compare.renamedetector import RenameDetector
 
 
-
 class ModelCompare:
     def __init__(self):
         pass
@@ -277,7 +276,6 @@ class ModelCompare:
                                         strModel)
 
         return changecount
-
 
     def recurseNodesCreateDeps(
         self,
@@ -603,7 +601,6 @@ class ModelCompare:
                 changeCount += 1
             return changeCount
 
-
     @staticmethod
     def compareDeps(
         compareElem: SElement,
@@ -643,6 +640,3 @@ class ModelCompare:
             else:
                 # both null
                 return 0
-
-
-

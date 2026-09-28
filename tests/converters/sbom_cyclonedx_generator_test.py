@@ -4539,7 +4539,7 @@ def test_group_is_unchanged_by_an_estate_root_rename():
     root inside it meant an organisational rename -- the least stable segment of the path --
     silently re-identified everything below it.
     """
-    before = generate_multi_from_sgraph(_estate('TalenomSoftware'), level=3, transitive=True)
+    before = generate_multi_from_sgraph(_estate('AcmeSoftware'), level=3, transitive=True)
     after = generate_multi_from_sgraph(_estate('SaaS'), level=3, transitive=True)
 
     groups_before = sorted(d['metadata']['component'].get('group', '') for d in before)

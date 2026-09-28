@@ -73,5 +73,4 @@ def graph_to_dot(g: SGraph):
     print('}')
 
 
-
 graph_to_dot(egm)
