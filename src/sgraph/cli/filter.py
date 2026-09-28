@@ -26,7 +26,7 @@ def traverse_graph_and_add_assoications_within(orig_model: SGraph, new_model: SG
 
                 ea: SElementAssociation = SElementAssociation(elem, target_elem_new, association.deptype, association.attrs)
                 ea.initElems()
-        
+
         stack.extend(elem.children)
 
 
@@ -38,7 +38,7 @@ def filter_model(graph: SGraph, query: str, direction: str, deps_level: int, det
         if query in elem.name:
             matching_elems.append(elem)
         stack.extend(elem.children)
-    
+
     # create a new graph with the matching elements
     new_graph = SGraph()
     new_model_to_orig_model: dict[SElement, SElement] = {}
@@ -48,7 +48,7 @@ def filter_model(graph: SGraph, query: str, direction: str, deps_level: int, det
         if created:
             new_model_to_orig_model[new_elem] = elem2
             orig_model_to_new_model[elem2] = new_elem
-    
+
     if deps_level == 0:
         pass
     elif deps_level == 1:
@@ -103,7 +103,6 @@ def filter_model(graph: SGraph, query: str, direction: str, deps_level: int, det
             for child in elem.children:
                 handle_elem(child, current_level + 1)
 
-
         sub_graph = SGraph()
         handle_elem(new_graph.rootNode, 0)
 
@@ -134,12 +133,9 @@ def filter_model(graph: SGraph, query: str, direction: str, deps_level: int, det
                 ea: SElementAssociation = SElementAssociation(from_elem_new, to_elem_new, deptype, attrs)
                 ea.initElems()
 
-        
         return sub_graph
 
-    
     return new_graph
-
 
 
 if __name__ == "__main__":
@@ -148,7 +144,7 @@ if __name__ == "__main__":
     parser.add_argument('--direction', type=str, required=False, help='Direction of the dependency traversal: inbound, outbound, both, none, undirected. Default is both.')
     parser.add_argument('--deps-level', type=int, required=False, help='Deps level to filter model: default is 0. Number 1 means that dependencies are shown between the elements in the scope.')
     parser.add_argument('--detail-level', type=int, required=False, help='Detail level to filter model')
-    
+
     parser.add_argument('--model-file', type=str, required=False, help='Model file to filter')
     # boolean to indicate the model is a zip file
     # Make a toggle for using zipped model content from stdin

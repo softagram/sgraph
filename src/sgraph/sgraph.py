@@ -788,7 +788,7 @@ class SGraph:
                             self.id_to_elem_map[avalue] = e
                         elif aname != 'n':
                             if not self.ignore_all_elem_attributes:
-                                if not aname in self.blacklisted_elem_attributes:
+                                if aname not in self.blacklisted_elem_attributes:
                                     if self.whitelisted_elem_attributes:
                                         if aname in self.whitelisted_elem_attributes:
                                             e.addAttribute(self._shared(aname),
@@ -796,7 +796,6 @@ class SGraph:
                                     else:
                                         e.addAttribute(self._shared(aname),
                                                        self._shared(avalue))
-
 
                     if self.only_root:
                         raise ParsingIntentionallyAborted('Aborted intentionally')
@@ -959,9 +958,9 @@ class SGraph:
                                  elem_attribute_filters: Optional[list[str]]=None,
                                  only_root: bool=False,
                                  assoc_attribute_filters: Optional[list[str]]=None):
-            return SGraph.__parse_xml(filename_or_stream, type_rules,
-                             elem_attribute_filters, only_root, False,
-                             assoc_attribute_filters)
+        return SGraph.__parse_xml(filename_or_stream, type_rules,
+                                  elem_attribute_filters, only_root, False,
+                                  assoc_attribute_filters)
 
     @staticmethod
     def parse_xml_string(xml_string: str,
@@ -973,7 +972,6 @@ class SGraph:
                                 elem_attribute_filters,
                                 only_root, True,
                                 assoc_attribute_filters)
-
 
     @staticmethod
     def parse_deps(filename: str):

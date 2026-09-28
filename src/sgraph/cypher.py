@@ -20,7 +20,7 @@ Usage:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -348,7 +348,6 @@ ALL_FORMATS = TABULAR_FORMATS + GRAPH_FORMATS
 def _output_tabular(result: pd.DataFrame, fmt: str):
     """Write DataFrame in a tabular format to stdout."""
     import json as json_mod
-    import sys
 
     if fmt == 'table':
         if len(result):
@@ -467,7 +466,7 @@ def main():
         sys.exit(1)
     t_load = time.time() - t0
 
-    print(f'Building Cypher index...', file=sys.stderr)
+    print('Building Cypher index...', file=sys.stderr)
     t0 = time.time()
     include_hierarchy = not args.no_hierarchy
     backend = SGraphCypherBackend(root=model.rootNode,
