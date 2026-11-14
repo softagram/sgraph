@@ -172,6 +172,13 @@ class TestTheShapesThatKeepTheirComponent:
         [component] = components_of(model_with('string-width-cjs', 'npm:string-width@^4.2.0'))
         assert component['purl'] == 'pkg:npm/string-width-cjs@npm:string-width@^4.2.0'
 
+    def test_a_local_tarball_without_a_slash_keeps_its_component(self):
+        """`file:x.tgz` names one artifact beside the manifest. The slash that marks `file:../x`
+        as a source reference is not there, so the protocol has to say it instead."""
+        sbom = sbom_cyclonedx_generator.generate_from_sgraph(model_with('x', 'file:x.tgz'))
+        assert [c['version'] for c in sbom['components']] == ['file:x.tgz']
+        assert OMITTED_NON_CONCRETE_PROPERTY not in metadata_properties(sbom)
+
     def test_an_empty_version_keeps_its_versionless_component(self):
         """An element that asserts no version asserts nothing wrong. resolved_purl already
         returns `pkg:npm/<name>` for it, and withholding would drop a package the document has

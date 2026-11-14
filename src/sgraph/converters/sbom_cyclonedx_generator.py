@@ -329,6 +329,9 @@ NPM_PURL_PREFIX = 'pkg:npm/'
 # have spared 66 of the corpus's offenders.
 NPM_SOURCE_REFERENCE = re.compile(r'/')
 
+# `file:x.tgz` is a local tarball beside the manifest: one artifact, and no slash to say so.
+NPM_FILE_PROTOCOL = 'file:'
+
 # `npm:string-width@^4.2.0` installs a real package under another name. Nine components in the
 # stored models carry one, and the purl keeps it verbatim.
 NPM_ALIAS_PREFIX = 'npm:'
@@ -363,6 +366,7 @@ def npm_purl_names_no_release(ref: str, version, version_kind: str = '') -> bool
         return False
     return not (is_exact_npm_version(version)
                 or NPM_SOURCE_REFERENCE.search(version)
+                or version.startswith(NPM_FILE_PROTOCOL)
                 or version.startswith(NPM_ALIAS_PREFIX))
 
 
