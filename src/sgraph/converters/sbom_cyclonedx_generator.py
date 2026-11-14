@@ -9,6 +9,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from sgraph import SGraph, SElement
 from sgraph.converters.external_root_semantics import (canonical_purl_name,
+                                                       VERSION_KIND_ATTRIBUTE,
                                                        is_advisory_materialised,
                                                        repair_npm_package_name)
 
@@ -304,6 +305,78 @@ def is_unresolved_version(version):
     so the maven path and the shared path cannot drift apart.
     """
     return bool(UNRESOLVED_VERSION.fullmatch(version))
+
+
+# An exact npm release: major.minor.patch, optionally a prerelease and/or build metadata, and
+# optionally the `=` or `v` prefixes npm accepts on an exact spec. Anything else -- a range, a
+# dist-tag, a plugin protocol -- names a set of releases, not one.
+EXACT_NPM_VERSION = re.compile(
+    r'^[=v]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')
+
+# How many components a document withheld because their npm version named no release. Reported
+# rather than left silent: a withheld component and a dependency that is not there look the same
+# to a consumer, and only one of them is true.
+OMITTED_NON_CONCRETE_PROPERTY = 'softagram:omittedNonConcreteVersions'
+
+# The purl every npm component carries. Matched on the built purl rather than re-deciding the
+# ecosystem, so this rule cannot disagree with the type the document actually declares.
+NPM_PURL_PREFIX = 'pkg:npm/'
+
+
+# A version holding a slash points somewhere -- `github:user/repo#sha`, `file:../x`,
+# `link:../app`. A range never does, which is what separates the two: `backstage:^` is a yarn
+# plugin protocol carrying a range and has no slash, and sparing it on the colon alone would
+# have spared 66 of the corpus's offenders.
+NPM_SOURCE_REFERENCE = re.compile(r'/')
+
+# `npm:string-width@^4.2.0` installs a real package under another name. Nine components in the
+# stored models carry one, and the purl keeps it verbatim.
+NPM_ALIAS_PREFIX = 'npm:'
+
+
+def npm_purl_names_no_release(ref: str, version, version_kind: str = '') -> bool:
+    """Whether this purl asserts an npm version that names a *set* of releases rather than one.
+
+    Only a purl that *carries* a version can assert a wrong one. resolved_purl already returns a
+    versionless npm purl for an unresolved expression, a URL-shaped version and an empty one --
+    shapes where the version is disclosed but deliberately kept out of the identity.
+
+    Of the versions that do reach the splice, only range shapes are withheld: `4`, `*`, `1 - 3`,
+    `1.x`, `backstage:^`. A source reference and an alias both name one thing, and dropping them
+    would delete packages the document has always listed -- the failure that is expensive,
+    because it looks like an improvement while inventory disappears.
+
+    ``version_kind`` is the producer's own statement about what the version segment means, and
+    `external_root_semantics` is explicit that suppression reads that attribute "and NOTHING
+    else". So a marked element is left alone here: `declared_range` names a population sgraph
+    still emits on purpose, and deciding otherwise is a producer-side change, not one this rule
+    may take by reading the string.
+
+    The separator is unambiguous: a scoped name reaches the purl percent-encoded (%40scope/name),
+    so a bare '@' after the type is the version splice and nothing else.
+    """
+    if not ref.startswith(NPM_PURL_PREFIX) or version_kind:
+        return False
+    if '@' not in ref[len(NPM_PURL_PREFIX):]:
+        return False
+    if not isinstance(version, str):
+        return False
+    return not (is_exact_npm_version(version)
+                or NPM_SOURCE_REFERENCE.search(version)
+                or version.startswith(NPM_ALIAS_PREFIX))
+
+
+def is_exact_npm_version(version) -> bool:
+    """Whether this version names one published npm release.
+
+    npm is the ecosystem where the model has carried declared ranges in the version field --
+    `debug of version 4` is the range https-proxy-agent asks for. Spliced into a purl that
+    becomes `pkg:npm/debug@4`, which matched a malicious-package advisory for 4.4.2 in 66
+    repositories that install no such thing.
+
+    Read off a model, so the argument is untrusted: a non-string is not a version.
+    """
+    return isinstance(version, str) and bool(EXACT_NPM_VERSION.fullmatch(version))
 
 
 def is_maven_coordinate(value):
@@ -929,7 +1002,8 @@ def finalize_components(components):
             _set_property(component, SUPERSEDED_PROPERTY, ';'.join(sorted(evidence['superseded'])))
 
 
-def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
+def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False,
+                     omitted=None):
     """
     Example data of an element:
       "bom-ref": "pkg:golang/github.com/0xAX/notificator@v0.0.0-20191016112426-3962a5ea8da1",
@@ -970,6 +1044,8 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
     :param other_externals_by_name: dict of external elements by name
     :param external_root:
     :param noisy: whether to print noisy output to stderr about possible issues
+    :param omitted: a list the paths of withheld elements are appended to, or None. An npm
+        element whose version names no release is withheld: see is_exact_npm_version.
     :return:
     """
     licenses = bom_licenses(elem)
@@ -986,6 +1062,16 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
         if v is None:
             v = ''
         ref, repaired_name, purl_properties = resolved_purl(elem, v)
+
+        if npm_purl_names_no_release(ref, v, elem.attrs.get(VERSION_KIND_ATTRIBUTE, '')):
+            # Withheld, not emitted versionless: a versionless purl is matched broadly by
+            # consumers, so dropping the version widens the claim rather than withdrawing it.
+            if omitted is not None:
+                omitted.append(elem.getPath())
+            if noisy:
+                sys.stderr.write(f'Withholding {elem.getPath()}: version {v!r} names no npm '
+                                 f'release\n')
+            return output
 
         direct_deps, indirect_deps = produce_source_code_references(elem, external_root)
         direct_deps_paths = ';'.join(sorted(direct_deps))
@@ -1057,7 +1143,8 @@ def analyze_3rdparty(external_root, sbom):
     surviving_component_by_key = {}
     while stack:
         elem = stack.pop(0)
-        for bom_component in elem_as_bom_data(elem, other_externals_by_name, external_root):
+        for bom_component in elem_as_bom_data(elem, other_externals_by_name, external_root,
+                                              omitted=sbom.omitted_non_concrete):
             key = dedup_key(bom_component['bom-ref'])
             if key not in surviving_component_by_key:
                 surviving_component_by_key[key] = bom_component
@@ -1219,6 +1306,9 @@ class SBOM:
         self.metadata_component = {}
         self.components = []
         self.spec_version = _validated_spec_version(spec_version)
+        # Paths of elements withheld because their npm version names no release. A list rather
+        # than a counter so that noisy mode and a future report can name them.
+        self.omitted_non_concrete = []
 
     def as_cyclonedx_json(self):
         data = copy.deepcopy(SBOM.BASIC_INFO)
@@ -1234,6 +1324,12 @@ class SBOM:
         data['metadata']['timestamp'] = datetime.now().isoformat() + 'Z'
 
         data['metadata']['component'] = self.metadata_component
+        if self.omitted_non_concrete:
+            # Only when something was withheld: a property reading 0 on every clean document is
+            # noise a consumer has to filter before it can find the documents that matter.
+            data['metadata'].setdefault('properties', []).append({
+                'name': OMITTED_NON_CONCRETE_PROPERTY,
+                'value': str(len(self.omitted_non_concrete))})
         # Everything in this list is now final: the evidence collected while components were
         # folded is rendered into properties here, once, where every document passes.
         finalize_components(self.components)
@@ -1416,7 +1512,7 @@ def _declared_within_reach(assoc, subtree_path):
 
 
 def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_by_name,
-                                  transitive_externals=False, max_depth=None):
+                                  transitive_externals=False, max_depth=None, omitted=None):
     """Collect the External dependencies of a subtree as BOM components.
 
     Two stages. The first walks the descendants of subtree_root and collects the externals they
@@ -1460,7 +1556,8 @@ def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_b
         if elem in ref_by_element:
             return ref_by_element[elem]
         ref = None
-        for component in elem_as_bom_data(elem, other_externals_by_name, external_root):
+        for component in elem_as_bom_data(elem, other_externals_by_name, external_root,
+                                          omitted=omitted):
             # Depth is published only in closure mode. Tagging depth 1 unconditionally would
             # change every existing default-mode BOM, which is exactly what the opt-in exists to
             # prevent; tagging nothing at depth 1 in closure mode would leave a consumer reading
@@ -1803,7 +1900,7 @@ def _keep_the_shorter_depth(surviving, duplicate):
 def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_elem_by_path,
                                             elem_serials, elem_bom_refs, orig_external_root,
                                             other_externals_by_name, transitive_externals=False,
-                                            max_depth=None):
+                                            max_depth=None, omitted=None):
     """Inline everything reachable from root_path into one self-contained BOM.
 
     Dependency-Track resolves dependency refs only within a single uploaded BOM: the BOM-Link
@@ -1853,7 +1950,8 @@ def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_el
     for path in order:
         elem = orig_elem_by_path[path]
         ext_components, ext_edges, ext_direct = _collect_3rdparty_for_subtree(
-            elem, orig_external_root, other_externals_by_name, transitive_externals, max_depth)
+            elem, orig_external_root, other_externals_by_name, transitive_externals, max_depth,
+            omitted=omitted)
         refs = []
         for component in ext_components:
             key = dedup_key(component['bom-ref'])
@@ -2002,13 +2100,13 @@ def _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals=F
         sbom.components, dependencies = _transitive_components_and_dependencies(
             path, ctx['gen_elem_by_path'], ctx['orig_elem_by_path'], ctx['elem_serials'],
             ctx['elem_bom_refs'], ctx['orig_external_root'], ctx['other_externals_by_name'],
-            transitive_externals, max_depth
+            transitive_externals, max_depth, omitted=sbom.omitted_non_concrete
         )
     else:
         # 3rd party components from original model (preserves version info)
         sbom.components, external_edges, direct_external_refs = _collect_3rdparty_for_subtree(
             orig_elem, ctx['orig_external_root'], ctx['other_externals_by_name'],
-            transitive_externals, max_depth
+            transitive_externals, max_depth, omitted=sbom.omitted_non_concrete
         )
 
         # Dependencies section
