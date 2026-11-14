@@ -1307,7 +1307,9 @@ class SBOM:
         self.components = []
         self.spec_version = _validated_spec_version(spec_version)
         # Paths of elements withheld because their npm version names no release. A list rather
-        # than a counter so that noisy mode and a future report can name them.
+        # than a counter so that noisy mode and a future report can name them. It may hold a path
+        # more than once: a transitive document runs one collection per element of its internal
+        # chain, and each reports what it withheld. The count is taken over distinct paths.
         self.omitted_non_concrete = []
 
     def as_cyclonedx_json(self):
@@ -1329,7 +1331,7 @@ class SBOM:
             # noise a consumer has to filter before it can find the documents that matter.
             data['metadata'].setdefault('properties', []).append({
                 'name': OMITTED_NON_CONCRETE_PROPERTY,
-                'value': str(len(self.omitted_non_concrete))})
+                'value': str(len(set(self.omitted_non_concrete)))})
         # Everything in this list is now final: the evidence collected while components were
         # folded is rendered into properties here, once, where every document passes.
         finalize_components(self.components)
@@ -1544,7 +1546,9 @@ def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_b
 
     components = []
     # dedup key -> the bom-ref spelling that survived under it, and element -> that same ref, so
-    # an element met twice is described once and always by the surviving spelling.
+    # an element met twice is described once and always by the surviving spelling. An element
+    # that describes no component is cached too, as None: describing it again would report a
+    # withheld element to `omitted` once per association instead of once.
     surviving_ref_by_key = {}
     surviving_component_by_key = {}
     ref_by_element = {}
@@ -1580,8 +1584,7 @@ def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_b
             surviving_component_by_key[key] = component
             components.append(component)
             ref = component['bom-ref']
-        if ref is not None:
-            ref_by_element[elem] = ref
+        ref_by_element[elem] = ref
         return ref
 
     def is_external(elem):

@@ -192,3 +192,76 @@ class TestTheShapesThatKeepTheirComponent:
         sbom = sbom_cyclonedx_generator.generate_from_sgraph(
             model_with('lodash', 'https://github.com/x/y.git'))
         assert OMITTED_NON_CONCRETE_PROPERTY not in metadata_properties(sbom)
+
+
+def model_with_a_shared_range():
+    """`debug of version 4` reached many ways at once, the shape a real estate has.
+
+    Two files of /Org/repo declare it, two packages of the resolved closure pull it in, and
+    /Org/other -- which /Org/repo imports, so the internal chain inlines it -- declares it too.
+    One element, so every document that withholds it withholds one component.
+    """
+    model = model_with('debug', '4')
+    debug = model.findElementFromPath('/Org/External/NPM/debug/debug of version 4')
+    index = model.createOrGetElementFromPath('/Org/repo/src/index.js')
+    index.setType('file')
+    SElementAssociation(index, debug, 'packagejson').initElems()
+    for name, version in (('https-proxy-agent', '7.0.0'), ('agent-base', '7.1.0')):
+        SElementAssociation(add_package(model, name, version), debug, 'packagejson').initElems()
+    other = model.createOrGetElementFromPath('/Org/other/package.json')
+    other.setType('file')
+    SElementAssociation(other, debug, 'packagejson').initElems()
+    SElementAssociation(index, other, 'import').initElems()
+    return model
+
+
+def multi_document_for_repo(model, **kwargs):
+    [sbom] = [s for s in sbom_cyclonedx_generator.generate_multi_from_sgraph(model, level=2,
+                                                                             **kwargs)
+              if s['metadata']['component']['name'] == 'repo']
+    return sbom
+
+
+def element_document_for_repo(model, **kwargs):
+    return sbom_cyclonedx_generator.generate_for_element_from_sgraph(model, '/Org/repo', **kwargs)
+
+
+EXPORT_MODES = [
+    pytest.param({}, id='level'),
+    pytest.param({'transitive_externals': True}, id='closure'),
+    pytest.param({'transitive': True}, id='internal-chain'),
+    pytest.param({'transitive': True, 'transitive_externals': True}, id='chain-and-closure'),
+]
+
+
+class TestEachWithheldElementIsCountedOnce:
+    """The count says how many components a document is missing, so it counts elements.
+
+    Counting encounters instead reported 26 for 10 distinct elements on a real model: a consumer
+    reconciling the document against its own inventory would go looking for 16 packages that
+    were never withheld.
+    """
+
+    @pytest.mark.parametrize('document_for', [multi_document_for_repo, element_document_for_repo],
+                             ids=['multi', 'element'])
+    @pytest.mark.parametrize('kwargs', EXPORT_MODES)
+    def test_a_range_reached_many_ways_is_counted_once(self, document_for, kwargs):
+        sbom = document_for(model_with_a_shared_range(), **kwargs)
+        assert metadata_properties(sbom).get(OMITTED_NON_CONCRETE_PROPERTY) == '1'
+        assert 'debug' not in [c['name'] for c in sbom['components']]
+
+    @pytest.mark.parametrize('transitive_externals', [False, True], ids=['level', 'closure'])
+    def test_the_collector_reports_a_withheld_element_once(self, transitive_externals):
+        """One subtree, one verdict per element: the collector is what the multi and element
+        exports share, so a per-encounter report here multiplies in every one of them."""
+        model = model_with_a_shared_range()
+        external_root = model.findElementFromPath('/Org/External')
+        others = {}
+        for elem in external_root.children:
+            for e in [elem] + list(elem.children):
+                others.setdefault(e.name, []).append(e)
+        sink = []
+        sbom_cyclonedx_generator._collect_3rdparty_for_subtree(
+            model.findElementFromPath('/Org/repo'), external_root, others,
+            transitive_externals=transitive_externals, omitted=sink)
+        assert sink == ['/Org/External/NPM/debug/debug of version 4']
