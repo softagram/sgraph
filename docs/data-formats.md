@@ -554,6 +554,17 @@ is reported instead. A root that is *in* the table and asserts no ecosystem (`Do
 - Combines with `--spec-version`; the counts and the composition are valid at every supported
   version, since the three `aggregate` values used are defined from 1.4 onward.
 
+#### `softagram:omittedNonConcreteVersions`
+
+An npm element whose version names a *set* of releases (`4`, `^4.1.0`, `1.x`, `*`, `latest`, or a
+yarn plugin protocol such as `backstage:^`) yields no component: spliced into a purl it would claim
+one release, and a vulnerability matcher would match advisories against a release nobody installed.
+Exact versions, source references that contain a path (`github:user/repo#sha`, `link:../x`) and
+every `file:` reference, npm aliases (`npm:pkg@^4`),
+versionless elements and elements whose producer set `version_kind` are kept. Always, not only
+with `--coverage`, the document's `metadata.properties` then carries this property: the number of
+distinct elements withheld from that document. It is absent when nothing was withheld.
+
 
 ### Where an element lives
 
