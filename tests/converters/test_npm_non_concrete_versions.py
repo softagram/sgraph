@@ -20,7 +20,7 @@ from sgraph.converters import sbom_cyclonedx_generator
 from sgraph.converters.sbom_cyclonedx_generator import (OMITTED_NON_CONCRETE_PROPERTY,
                                                         is_exact_npm_version)
 
-# Ranges, tags and plugin protocols seen in the estate's own models, with the count each had.
+# Ranges, tags and plugin protocols seen in the estate's own models.
 NON_CONCRETE = ['*', 'backstage:^', '3', '1', '2', '1 - 3', '4', '1.x', '2.x.x', '>=1',
                 '^4.1.0', '~1.2.3', 'latest', 'next', '1.2', 'v1.x']
 
