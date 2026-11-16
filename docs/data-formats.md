@@ -440,7 +440,50 @@ document's own subject, and not a 3rd-party package. It appears as a component m
   invented. (Before 1.13.0 the key was present and empty, which CycloneDX types as an
   iri-reference and the empty string is not one.)
 - Components describing internal packages carry **no** `dependencyDepth`. That property counts
-  package hops through the 3rd-party closure, and an element of the estate is not one.
+  package hops through the 3rd-party closure, and an element of the estate is not one. The
+  exception is a row folded with an installed copy, below: the copy is a release in that
+  closure, and keeps the depth it was found at.
+
+#### An internal package the consumer installed from a registry
+
+A consumer can install, from a feed, a package another element of the estate publishes. The
+analyzer then stores the installed copy under `External` like any other release and marks it with
+the `internal_package` attribute, naming the publisher's package element. When the publisher's
+internal component and that copy are both in a document, they are **one component**, not two:
+
+```json
+{ "bom-ref": "acmelibsui",
+  "type": "library",
+  "name": "@acme/ui",
+  "version": "1.2.0",
+  "purl": "pkg:npm/%40acme/ui@1.2.0?repository_url=https:%2F%2Fpkgs.example.com%2Fnpm",
+  "group": "acme-platform",
+  "properties": [
+    { "name": "softagram:internal", "value": "true" },
+    { "name": "softagram:packageName", "value": "@acme/ui" },
+    { "name": "softagram:packageEcosystem", "value": "npm" },
+    { "name": "softagram:elementPath", "value": "/acme-platform/acme.libs.ui" },
+    { "name": "sourceCodeReferences", "value": "/acme-platform/acme.shop.webui/package.json" },
+    { "name": "softagram:packageSource", "value": "https://pkgs.example.com/npm" },
+    { "name": "softagram:publishedVersion", "value": "1.3.0" }
+  ],
+  "externalReferences": [
+    { "url": "urn:cdx:4e346acd-141d-5b94-97b4-d0d28af26e0f/1", "type": "bom" }
+  ] }
+```
+
+- `version` and `purl` are the **installed copy's**: they describe the bytes the consumer
+  actually has, which is what a vulnerability match needs. `softagram:publishedVersion` keeps the
+  version the publisher's own manifest declares now, so a row whose publisher has moved on still
+  says so.
+- The `bom-ref`, the location properties and the BOM-Link are the internal component's, exactly
+  as without the fold. Every dependency entry that named the copy names this ref instead, so in a
+  closure document what the consumer's lock installed under the package hangs off this row.
+- The purl is the copy's only when the copy records the feed it came from. Without one, an
+  unqualified `pkg:npm` purl would claim the public registry for an estate package, so the row
+  keeps `pkg:generic` at the installed version.
+- Nothing folds on a name alone. Without the attribute, without the publisher's component in the
+  document, or with two installed copies naming the same publisher, both rows stay as they are.
 
 ### Where a package was fetched from
 

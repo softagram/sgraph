@@ -903,6 +903,19 @@ def produce_source_code_references(elem, external_root) -> tuple[list[str], list
 EVIDENCE_KEY = '_evidence'
 SUPERSEDED_PROPERTY = 'supersededIdentifiers'
 
+# The attribute the npm analyzer stamps on an installed copy of a package the estate publishes
+# itself: the path of the publisher's package element. The copy is a release the consumer
+# installed and is stored like any other, so locality is stated as data rather than by withholding
+# the copy. This module is the reader it is written for: _fold_installed_internal_copies.
+INTERNAL_PACKAGE_ATTRIBUTE = 'internal_package'
+
+# Collection-time keys, like EVIDENCE_KEY, and dropped with it by finalize_components. A copy
+# carries the publisher's package element path it read from INTERNAL_PACKAGE_ATTRIBUTE; an
+# internal component carries the path of the package element its identity was read from. The two
+# meeting on one path is what makes a copy and an internal component the same package.
+PUBLISHER_KEY = '_publisher'
+PUBLISHED_PACKAGE_KEY = '_publishedPackage'
+
 
 def _property(component, name):
     for prop in component.get('properties', []):
@@ -982,17 +995,26 @@ def merge_component_evidence(surviving, duplicate):
         if 'purl' in surviving:
             surviving['purl'] = purl_without_qualifiers(surviving['purl'])
 
+    # Who publishes the package is the same kind of claim, and takes the same rule: it survives
+    # only when every element folded into the row names the same publisher. The fold it enables
+    # replaces this row's identity, so it must not rest on one element of several.
+    if surviving.get(PUBLISHER_KEY) != duplicate.get(PUBLISHER_KEY):
+        surviving.pop(PUBLISHER_KEY, None)
+
 
 def finalize_components(components):
-    """Re-render the evidence-derived properties and drop the collection-time key.
+    """Re-render the evidence-derived properties and drop the collection-time keys.
 
     Called once per document at the render boundary rather than in any collection function:
     collection functions nest — the transitive walk folds across what the per-subtree collector
     returns — so a pass that must observe the completed state of a document belongs where the
-    document is rendered. Idempotent, and it never touches a component that carries no evidence,
-    which is every internal component.
+    document is rendered. Idempotent. The publisher keys are dropped from every component; the
+    evidence-derived properties are re-rendered only on a component that carries evidence, which
+    no unfolded internal component does.
     """
     for component in components:
+        component.pop(PUBLISHER_KEY, None)
+        component.pop(PUBLISHED_PACKAGE_KEY, None)
         evidence = component.pop(EVIDENCE_KEY, None)
         if evidence is None:
             continue
@@ -1117,6 +1139,9 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False,
                 'superseded': []
             }
         }
+        publisher = str(elem.attrs.get(INTERNAL_PACKAGE_ATTRIBUTE) or '').strip()
+        if publisher:
+            component[PUBLISHER_KEY] = publisher
         output.append(component)
     else:
         if elem.incoming:
@@ -1746,6 +1771,12 @@ def _externals_hanging_off_element(refs, direct_refs, edges):
 # registered purl type with no default package repository, which is exactly what an internally
 # published package is.
 #
+# The ruling governs a package known only as the publisher's element. When the document also
+# holds the copy a consumer installed, _fold_installed_internal_copies gives the row that copy's
+# purl instead -- but only when the copy records the feed it came from, so the purl either carries
+# a repository_url qualifier naming a private feed, or names the public registry because the
+# package really was fetched from there. Neither is the unqualified claim this type avoids.
+#
 # One constant rather than a literal at the splice, so reversing this ruling is a one-line change
 # rather than a hunt through the module.
 INTERNAL_PACKAGE_PURL_TYPE = 'generic'
@@ -1760,6 +1791,15 @@ PACKAGE_NAME_PROPERTY = 'softagram:packageName'
 
 
 def _package_identity_in_subtree(level_elem):
+    """The (ecosystem, name, version) of the package a content element publishes, or None.
+
+    See _published_package_in_subtree, which also returns the package element itself.
+    """
+    found = _published_package_in_subtree(level_elem)
+    return None if found is None else found[1:]
+
+
+def _published_package_in_subtree(level_elem):
     """The package a content element publishes, or None when that is not unambiguous.
 
     Reads the ecosystem-neutral triple the analyzers stamp on a package element — 'package_name',
@@ -1781,8 +1821,9 @@ def _package_identity_in_subtree(level_elem):
     ambiguous element costs a consumer nothing it had before.
 
     :param level_elem: the content element an SBOM or an inlined component describes
-    :return: (ecosystem, name, version), with ecosystem None when the element does not name one,
-             or None when the subtree publishes no package or several indistinguishable ones.
+    :return: (package element, ecosystem, name, version), with ecosystem None when the element
+             does not name one, or None when the subtree publishes no package or several
+             indistinguishable ones.
     """
     candidates = []
     stack = [level_elem]
@@ -1807,8 +1848,7 @@ def _package_identity_in_subtree(level_elem):
             return None
         candidates = depended_upon
 
-    _, ecosystem, name, version = candidates[0]
-    return ecosystem, name, version
+    return candidates[0]
 
 
 def _has_incoming_from_outside(elem, level_elem):
@@ -1849,9 +1889,10 @@ def _internal_element_component(bom_ref, elem, serial):
             'type': 'bom'
         }],
     }
-    identity = _package_identity_in_subtree(elem)
-    if identity is not None:
-        ecosystem, name, version = identity
+    published = _published_package_in_subtree(elem)
+    if published is not None:
+        package_elem, ecosystem, name, version = published
+        component[PUBLISHED_PACKAGE_KEY] = package_elem.getPath()
         component['name'] = name
         component['version'] = version
         component['purl'] = f'pkg:{INTERNAL_PACKAGE_PURL_TYPE}/{name}@{version}'
@@ -1866,6 +1907,113 @@ def _internal_element_component(bom_ref, elem, serial):
     _add_element_location(component, elem)
     _add_vcs_reference(component, elem)
     return component
+
+
+# The version the publisher's own package element declares, on a row that describes the release
+# a consumer installed. It is the one fact the publisher's row carried that the installed copy does
+# not: without it, folding the two would hide that the publisher has moved on.
+PUBLISHED_VERSION_PROPERTY = 'softagram:publishedVersion'
+
+
+def _fold_installed_internal_copies(components, dependencies):
+    """List an estate-published package once when the document holds its installed copy too.
+
+    A consumer that installs a package another element of the estate publishes reaches it twice:
+    its declaration resolves to the publisher's element, which becomes an internal component, and
+    its lock installed a copy, which the analyzer stores under External like any other release and
+    marks with INTERNAL_PACKAGE_ATTRIBUTE. Both describe one package, so the document used to list
+    it twice, and the two rows disagreed on the version as soon as the publisher moved on.
+
+    The two become one component. It keeps the internal component's place, bom-ref and identity
+    properties -- the dependency graph names the element by that ref, and the location, the
+    repository and the BOM-Link still answer where the package lives -- and takes from the copy
+    what describes the bytes the consumer installed: name, version, purl, licenses and the
+    copy's own properties. The publisher's current version stays as PUBLISHED_VERSION_PROPERTY.
+
+    Every dependency entry naming the copy is renamed to the internal ref, and entries that then
+    share a ref are merged as the union of their dependsOn. In the transitive view that one entry
+    holds both what the publisher's manifest declares and what the consumer's lock installed under
+    the copy; both are true of the package the row describes.
+
+    Folded only on evidence, never on a guess:
+    - the copy must name the publisher's package element, through the attribute; a shared name
+      alone is the dependency-confusion inference the analyzer's resolution ladder refuses;
+    - exactly one copy and one internal component must name that element. Two installed copies
+      of one publisher leave nothing to say which of them the publisher's row duplicates.
+
+    :return: (components, dependencies), unchanged when nothing folds
+    """
+    internal_by_package = {}
+    copies_by_publisher = {}
+    for component in components:
+        if PUBLISHED_PACKAGE_KEY in component:
+            internal_by_package.setdefault(component[PUBLISHED_PACKAGE_KEY], []).append(component)
+        if PUBLISHER_KEY in component:
+            copies_by_publisher.setdefault(component[PUBLISHER_KEY], []).append(component)
+
+    renamed = {}
+    folded_away = set()
+    for package_path, internals in internal_by_package.items():
+        copies = copies_by_publisher.get(package_path, [])
+        if len(internals) != 1 or len(copies) != 1:
+            continue
+        internal, installed = internals[0], copies[0]
+        _take_the_installed_copy(internal, installed)
+        renamed[installed['bom-ref']] = internal['bom-ref']
+        folded_away.add(id(installed))
+
+    if not renamed:
+        return components, dependencies
+    components = [component for component in components if id(component) not in folded_away]
+    return components, _renamed_dependencies(dependencies, renamed)
+
+
+def _take_the_installed_copy(internal, installed):
+    """Make the internal component describe the release the installed copy is.
+
+    The purl is the copy's only when the copy says where it came from. A copy with no recorded
+    source would carry an unqualified ecosystem purl, which asserts the public registry -- for a
+    package the estate publishes, the very claim INTERNAL_PACKAGE_PURL_TYPE exists to avoid. That
+    row keeps the internal purl type at the installed version instead.
+    """
+    published_version = internal['version']
+    name = _property(internal, PACKAGE_NAME_PROPERTY)['value']
+
+    internal['name'] = installed['name']
+    internal['version'] = installed['version']
+    if _property(installed, PACKAGE_SOURCE_PROPERTY) is not None:
+        internal['purl'] = installed['purl']
+    else:
+        internal['purl'] = f"pkg:{INTERNAL_PACKAGE_PURL_TYPE}/{name}@{installed['version']}"
+    for field in ('licenses', 'scope', 'description'):
+        if field in installed:
+            internal[field] = installed[field]
+    internal['properties'] += installed.get('properties', [])
+    if published_version:
+        internal['properties'].append({
+            'name': PUBLISHED_VERSION_PROPERTY,
+            'value': published_version
+        })
+    internal['externalReferences'] += installed.get('externalReferences', [])
+    if EVIDENCE_KEY in installed:
+        internal[EVIDENCE_KEY] = installed[EVIDENCE_KEY]
+
+
+def _renamed_dependencies(dependencies, renamed):
+    """The dependency graph with refs renamed, entries sharing a ref merged, self-edges dropped.
+
+    Entries keep the order of their first appearance, and dependsOn the order of first mention,
+    so the graph stays byte-stable between runs.
+    """
+    merged = {}
+    for dependency in dependencies:
+        ref = renamed.get(dependency['ref'], dependency['ref'])
+        depends_on = merged.setdefault(ref, [])
+        for target in dependency['dependsOn']:
+            target = renamed.get(target, target)
+            if target != ref and target not in depends_on:
+                depends_on.append(target)
+    return [{'ref': ref, 'dependsOn': depends_on} for ref, depends_on in merged.items()]
 
 
 def _depth_property(component):
@@ -2160,6 +2308,11 @@ def _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals=F
 
         dependencies = [{'ref': ref, 'dependsOn': depends_on}]
         dependencies += _external_dependency_entries(external_edges)
+
+    # Both views, once their components and graph are complete: an installed copy and the
+    # internal component of its publisher can meet in either.
+    sbom.components, dependencies = _fold_installed_internal_copies(sbom.components,
+                                                                    dependencies)
 
     data = sbom.as_cyclonedx_json()
     data['serialNumber'] = serial
