@@ -19,8 +19,10 @@ Usage:
     ''')
 """
 
+import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterator, List, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -218,12 +220,54 @@ class SGraphCypherBackend(Graph[int, int]):
         return self._edge_dst[edge]
 
 
+_INFER_STRING_OPTION = 'future.infer_string'
+_INFER_STRING_DEPRECATION = r".*'future\.infer_string' option is deprecated"
+
+
+@contextmanager
+def _strings_as_object_dtype() -> Iterator[None]:
+    """Keep pandas from inferring the ``str`` dtype while spycy runs.
+
+    spycy represents Cypher ``null`` as ``pd.NA`` and detects it with
+    ``value is pd.NA``. pandas 3 infers the ``str`` dtype for string columns by
+    default, and that dtype stores a missing value as ``NaN``, so a null that
+    passes through a spycy table is no longer null: ``IS NULL`` stops matching,
+    ``coalesce`` returns NaN and ``count`` counts it. Turning the inference off
+    restores pandas 2 behaviour (``object`` columns holding ``pd.NA``).
+
+    The option does not exist before pandas 2.1, where strings are never
+    inferred as ``str``, so there is nothing to do. pandas 3 deprecates it and
+    pandas 4 is to remove it; then this becomes a no-op again and the tests in
+    tests/test_cypher_null_semantics.py fail until spycy stops relying on
+    ``pd.NA`` in string columns. The option is process-wide, so a query running
+    concurrently in another thread sees it too.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message=_INFER_STRING_DEPRECATION)
+        try:
+            previous = pd.get_option(_INFER_STRING_OPTION)
+            pd.set_option(_INFER_STRING_OPTION, False)
+        except KeyError:  # pandas.errors.OptionError subclasses KeyError
+            previous = None
+    try:
+        yield
+    finally:
+        if previous is not None:
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', message=_INFER_STRING_DEPRECATION)
+                pd.set_option(_INFER_STRING_OPTION, previous)
+
+
 @dataclass
 class SGraphCypherExecutor(CypherExecutorBase[int, int]):
     """Cypher executor for sgraph models."""
     graph: SGraphCypherBackend = field(
         default_factory=lambda: SGraphCypherBackend(SElement(None, ''))
     )
+
+    def exec(self, query_str: str) -> pd.DataFrame:
+        with _strings_as_object_dtype():
+            return super().exec(query_str)
 
 
 def cypher_query(model, query: str,
