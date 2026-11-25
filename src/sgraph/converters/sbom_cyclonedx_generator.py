@@ -786,6 +786,67 @@ def purl_without_qualifiers(purl):
     return purl.split('?', 1)[0]
 
 
+# The CPE 2.3 name the analyzer identified the component as, stamped on the version-specific
+# element. Emitted as the component's 'cpe', which is what a consumer matching against NVD reads:
+# a purl reaches OSV and GitHub advisories, but NVD is indexed by CPE, and for a docker image no
+# purl-indexed source exists at all.
+#
+# This module only carries the value. Deciding which product an element is belongs to the
+# analyzer that has the evidence, so no image name, package name or vendor is looked up or
+# derived here: a CPE guessed from a name attributes another product's CVEs to the component.
+COMPONENT_CPE_ATTRIBUTE = 'component_cpe'
+
+# The CPE 2.3 formatted string binding, as NISTIR 7695 section 6.2 defines it: 'cpe:2.3:', the
+# part, then ten attribute values, the language one restricted to a language tag.
+_CPE_AV = (r'(?:(?:\?*|\*?)(?:[a-zA-Z0-9\-._]|\\[\\*?!"#$%&\'()+,/:;<=>@\[\]^`{|}~])+(?:\?*|\*?)'
+           r'|[*\-])')
+_CPE_LANGUAGE = r'(?:[a-zA-Z]{2,3}(?:-(?:[a-zA-Z]{2}|[0-9]{3}))?|[*\-])'
+CPE23_FORMATTED_STRING = re.compile(
+    rf'cpe:2\.3:[aho*\-](?::{_CPE_AV}){{5}}:{_CPE_LANGUAGE}(?::{_CPE_AV}){{4}}')
+
+# One CPE attribute value: a run of escaped characters and characters other than ':' and '\'.
+_CPE_FIELD = re.compile(r'(?:\\.|[^:\\])+')
+
+
+def _names_one_release(cpe):
+    """Whether a well-formed CPE names one release of one product.
+
+    The part, vendor, product and version must each be a value, not ANY ('*') or NA ('-'), and
+    hold no unescaped wildcard. A CPE that leaves any of them open is matched against every
+    product or every version it covers, so a consumer would report advisories for releases the
+    component is not - the same widening for which a versionless npm purl is withheld rather than
+    emitted. The remaining attributes (update, edition, target software and the rest) may stay
+    ANY: that is how NVD itself records most products.
+    """
+    part, vendor, product, version = _CPE_FIELD.findall(cpe)[2:6]
+    for value in (part, vendor, product, version):
+        unescaped = re.sub(r'\\.', '', value)
+        if value in ('*', '-') or '*' in unescaped or '?' in unescaped:
+            return False
+    return True
+
+
+def component_cpe_of(elem):
+    """The element's CPE 2.3 name, or None when it has none or the value is unusable.
+
+    An unusable value is dropped and reported, never repaired. It is the analyzer's statement of
+    identity, so rewriting it here would publish a claim nobody made, and an SBOM that carries a
+    malformed CPE is rejected or mismatched by the consumer that reads it. The report names the
+    element so the analyzer's data can be fixed.
+    """
+    raw = elem.attrs.get(COMPONENT_CPE_ATTRIBUTE)
+    if raw is None:
+        return None
+    cpe = str(raw).strip()
+    if not cpe:
+        return None
+    if not CPE23_FORMATTED_STRING.fullmatch(cpe) or not _names_one_release(cpe):
+        sys.stderr.write(f'Warning: dropping {COMPONENT_CPE_ATTRIBUTE} {cpe!r} of '
+                         f'{elem.getPath()}: not a CPE 2.3 name of one product release\n')
+        return None
+    return cpe
+
+
 # The SPDX identifiers this converter is prepared to put in license.id, each with its canonical
 # url. Deliberately a short list of values someone has actually checked rather than a mapping
 # guessed from license strings: CycloneDX $refs the SPDX identifier list from license.id, so a
@@ -1001,6 +1062,12 @@ def merge_component_evidence(surviving, duplicate):
     if surviving.get(PUBLISHER_KEY) != duplicate.get(PUBLISHER_KEY):
         surviving.pop(PUBLISHER_KEY, None)
 
+    # Which product the row is, as NVD names it: an identity claim like the two above, so it
+    # survives on agreement only. Two elements folded into one row with different CPEs leave the
+    # row's product in doubt, and either CPE alone would match advisories the other denies.
+    if surviving.get('cpe') != duplicate.get('cpe'):
+        surviving.pop('cpe', None)
+
 
 def finalize_components(components):
     """Re-render the evidence-derived properties and drop the collection-time keys.
@@ -1142,6 +1209,9 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False,
         publisher = str(elem.attrs.get(INTERNAL_PACKAGE_ATTRIBUTE) or '').strip()
         if publisher:
             component[PUBLISHER_KEY] = publisher
+        cpe = component_cpe_of(elem)
+        if cpe is not None:
+            component['cpe'] = cpe
         output.append(component)
     else:
         if elem.incoming:
@@ -1985,7 +2055,7 @@ def _take_the_installed_copy(internal, installed):
         internal['purl'] = installed['purl']
     else:
         internal['purl'] = f"pkg:{INTERNAL_PACKAGE_PURL_TYPE}/{name}@{installed['version']}"
-    for field in ('licenses', 'scope', 'description'):
+    for field in ('licenses', 'scope', 'description', 'cpe'):
         if field in installed:
             internal[field] = installed[field]
     internal['properties'] += installed.get('properties', [])
