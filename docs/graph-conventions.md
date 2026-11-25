@@ -153,6 +153,16 @@ Associations represent directed dependencies between elements. The type is store
 | `repo_url` | str | Git remote URL (on repo elements) |
 | `version` | str | Version string (on External dependencies) |
 | `repotype` | str | Package ecosystem (NPM, PIP, APT, ...) |
+| `component_cpe` | str | CPE 2.3 name of the product release an External element is (see below) |
+
+**`component_cpe`** is written by the analyzer on a version-specific External element when it has
+identified, from curated evidence, which product release the element is — typically a docker
+image, which no purl-indexed advisory source covers, while NVD indexes the product by CPE. The
+CycloneDX converter emits it unchanged as the component's `cpe`. The value must be a CPE 2.3
+formatted string naming one release: part, vendor, product and version are concrete values, not
+`*`, `-` or wildcards. A value that is malformed or covers more than one release is dropped with a
+warning, and when elements folded into one component disagree, the component gets no `cpe`.
+sgraph never derives a CPE itself: which product an element is belongs to the analyzer.
 
 ### Association Attributes
 
